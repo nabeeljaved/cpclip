@@ -1,0 +1,40 @@
+# Build artifacts
+*.deb
+*.tar.gz
+*.rpm
+dist/
+build/
+
+# Test outputs
+tests/output/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+tmp/
+.temp/
+
+# Package manager
+node_modules/
+.npm/
+
+# Debian build files
+debian/files
+debian/*.debhelper
+debian/*.substvars
+debian/cpclip/
+
+# Coverage reports
+coverage/
+*.coverage
