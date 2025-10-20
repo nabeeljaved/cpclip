@@ -50,6 +50,132 @@ readonly BINARY_MIME_PATTERN="^application/"
 
 # Global variables
 OS=""
+CLIPBOARD_TOOL=""
+
+# Global flags
+FLAG_HELP=false
+FLAG_VERSION=false
+FLAG_TEXT=false
+FLAG_ARCHIVE=false
+FLAG_LIST=false
+FLAG_MIME=false
+TARGET_PATH=""
+
+# Cleanup function for temporary files and error handling
+cleanup() {
+  local exit_code=$?
+  # Only show error message for unexpected exit codes
+  # 0 = success, 130 = Ctrl+C, 141 = SIGPIPE (from head/pipe commands)
+  # Our defined exit codes: 1 (file not found), 2 (clipboard unavailable), 3 (permission denied), 4 (unsupported)
+  if [[ $exit_code -ne 0 && $exit_code -ne 130 && $exit_code -ne 141 ]]; then
+    # Only show generic error for truly unexpected exit codes
+    if [[ $exit_code -ne ${EXIT_FILE_NOT_FOUND:-1} &&
+          $exit_code -ne ${EXIT_CLIPBOARD_UNAVAILABLE:-2} &&
+          $exit_code -ne ${EXIT_PERMISSION_DENIED:-3} &&
+          $exit_code -ne ${EXIT_UNSUPPORTED_OPERATION:-4} ]]; then
+      echo -e "${COLOR_RED}Operation failed with exit code $exit_code${COLOR_RESET}" >&2
+    fi
+  fi
+  exit $exit_code
+}
+
+# Set up trap for cleanup
+trap cleanup EXIT INT TERM
+
+# Validate file path
+validate_path() {
+  local path="$1"
+
+  # Check if path is empty
+  if [[ -z "$path" ]]; then
+    echo -e "${COLOR_RED}Error: No file or folder specified${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  # Check if path exists
+  if [[ ! -e "$path" ]]; then
+    echo -e "${COLOR_RED}Error: Path does not exist: $path${COLOR_RESET}" >&2
+
+    # Suggest similar paths
+    local dirname=$(dirname "$path")
+    local basename=$(basename "$path")
+    if [[ -d "$dirname" ]]; then
+      local similar_files=$(find "$dirname" -maxdepth 1 -name "${basename:0:3}*" 2>/dev/null | head -5)
+      if [[ -n "$similar_files" ]]; then
+        echo -e "${COLOR_YELLOW}Similar files in $dirname:${COLOR_RESET}" >&2
+        echo "$similar_files" >&2
+      fi
+    fi
+    return 1
+  fi
+
+  # Check if path is readable
+  if [[ ! -r "$path" ]]; then
+    echo -e "${COLOR_RED}Error: Permission denied: $path${COLOR_RESET}" >&2
+    echo -e "${COLOR_YELLOW}Try: sudo cpclip $path${COLOR_RESET}" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+# Validate clipboard operation succeeded
+validate_clipboard_copy() {
+  # Try to read clipboard to verify
+  local clipboard_content=""
+
+  case "${CLIPBOARD_TOOL}" in
+    pbcopy)
+      if command -v pbpaste &> /dev/null; then
+        clipboard_content=$(pbpaste 2>/dev/null | head -c 100)
+      fi
+      ;;
+    xclip)
+      clipboard_content=$(xclip -selection clipboard -o 2>/dev/null | head -c 100)
+      ;;
+    xsel)
+      clipboard_content=$(xsel --clipboard --output 2>/dev/null | head -c 100)
+      ;;
+    wl-copy)
+      if command -v wl-paste &> /dev/null; then
+        clipboard_content=$(wl-paste 2>/dev/null | head -c 100)
+      fi
+      ;;
+  esac
+
+  # Basic validation (just check clipboard isn't empty)
+  if [[ -z "$clipboard_content" ]]; then
+    echo -e "${COLOR_YELLOW}Warning: Could not verify clipboard content${COLOR_RESET}" >&2
+    echo -e "${COLOR_YELLOW}Copy may have failed. Please check manually.${COLOR_RESET}" >&2
+  fi
+}
+
+# Enhanced error messages for common issues
+show_install_help() {
+  local os="$1"
+
+  echo -e "${COLOR_YELLOW}Installation Help:${COLOR_RESET}" >&2
+  echo "" >&2
+
+  case "$os" in
+    linux)
+      echo "Debian/Ubuntu:" >&2
+      echo "  sudo apt-get install xclip" >&2
+      echo "" >&2
+      echo "Fedora:" >&2
+      echo "  sudo dnf install xclip" >&2
+      echo "" >&2
+      echo "Arch:" >&2
+      echo "  sudo pacman -S xclip" >&2
+      ;;
+    macos)
+      echo "macOS clipboard tools should be pre-installed." >&2
+      echo "If missing, try reinstalling Command Line Tools:" >&2
+      echo "  xcode-select --install" >&2
+      ;;
+  esac
+  echo "" >&2
+}
 
 # Detect operating system
 detect_os() {
@@ -74,11 +200,644 @@ detect_os() {
   readonly OS
 }
 
+# Detect available clipboard tool
+detect_clipboard_tool() {
+  case "${OS}" in
+    macos)
+      if command -v pbcopy &> /dev/null; then
+        CLIPBOARD_TOOL="pbcopy"
+      else
+        echo -e "${COLOR_RED}Error: pbcopy not found${COLOR_RESET}" >&2
+        echo "pbcopy should be pre-installed on macOS." >&2
+        exit "${EXIT_CLIPBOARD_UNAVAILABLE}"
+      fi
+      ;;
+
+    linux)
+      if command -v xclip &> /dev/null; then
+        CLIPBOARD_TOOL="xclip"
+      elif command -v xsel &> /dev/null; then
+        CLIPBOARD_TOOL="xsel"
+      elif command -v wl-copy &> /dev/null; then
+        CLIPBOARD_TOOL="wl-copy"
+      elif command -v clip.exe &> /dev/null; then
+        # WSL fallback
+        CLIPBOARD_TOOL="clip.exe"
+      else
+        echo -e "${COLOR_RED}Error: No clipboard tool found${COLOR_RESET}" >&2
+        echo "" >&2
+        echo "Please install one of the following:" >&2
+        echo "  - Debian/Ubuntu: sudo apt-get install xclip" >&2
+        echo "  - Fedora: sudo dnf install xclip" >&2
+        echo "  - Arch: sudo pacman -S xclip" >&2
+        echo "  - Alpine: sudo apk add xclip" >&2
+        echo "" >&2
+        echo "Alternative clipboard tools:" >&2
+        echo "  - xsel: sudo apt-get install xsel" >&2
+        echo "  - wl-clipboard (Wayland): sudo apt-get install wl-clipboard" >&2
+        exit "${EXIT_CLIPBOARD_UNAVAILABLE}"
+      fi
+      ;;
+
+    windows)
+      if command -v clip.exe &> /dev/null; then
+        CLIPBOARD_TOOL="clip.exe"
+      else
+        echo -e "${COLOR_RED}Error: clip.exe not found${COLOR_RESET}" >&2
+        echo "clip.exe should be available in WSL." >&2
+        exit "${EXIT_CLIPBOARD_UNAVAILABLE}"
+      fi
+      ;;
+
+    *)
+      echo -e "${COLOR_RED}Error: Unsupported operating system: ${OS}${COLOR_RESET}" >&2
+      exit "${EXIT_UNSUPPORTED_OPERATION}"
+      ;;
+  esac
+
+  readonly CLIPBOARD_TOOL
+}
+
+# Display usage information
+show_usage() {
+  cat << EOF
+${COLOR_BLUE}cpclip${COLOR_RESET} v${VERSION} - Copy files and folders to clipboard
+
+${COLOR_YELLOW}USAGE:${COLOR_RESET}
+  cpclip [OPTIONS] <file|folder>
+
+${COLOR_YELLOW}OPTIONS:${COLOR_RESET}
+  -h, --help       Display this help message
+  -v, --version    Show version information
+  -t, --text       Copy folder as text tree (instead of file refs)
+  -a, --archive    Copy folder as tar.gz archive
+  -l, --list       Copy file paths only (one per line)
+  -m, --mime       Show MIME type (dry-run, don't copy)
+
+${COLOR_YELLOW}EXAMPLES:${COLOR_RESET}
+  cpclip file.txt              Copy file content to clipboard
+  cpclip image.png             Copy image with MIME type
+  cpclip folder/               Copy folder (native file refs)
+  cpclip --text folder/        Copy folder as text tree
+  cpclip --archive project/    Copy folder as tar.gz
+  cpclip --list *.md           Copy list of markdown files
+  cpclip --mime document.pdf   Show MIME type without copying
+
+${COLOR_YELLOW}SUPPORTED PLATFORMS:${COLOR_RESET}
+  macOS:   pbcopy, osascript
+  Linux:   xclip, xsel, wl-copy
+  WSL:     clip.exe
+
+${COLOR_YELLOW}MORE INFO:${COLOR_RESET}
+  Repository: https://github.com/username/cpclip
+  Issues:     https://github.com/username/cpclip/issues
+EOF
+}
+
+# Validate flag combinations
+validate_flags() {
+  # Check for conflicting flags
+  if [[ "${FLAG_TEXT}" == true && "${FLAG_ARCHIVE}" == true ]]; then
+    echo -e "${COLOR_RED}Error: Conflicting flags --text and --archive cannot be used together${COLOR_RESET}" >&2
+    echo -e "${COLOR_YELLOW}Choose one:${COLOR_RESET}" >&2
+    echo "  --text     Copy folder as text tree" >&2
+    echo "  --archive  Copy folder as tar.gz archive" >&2
+    exit 1
+  fi
+
+  # --list flag only makes sense with folders
+  if [[ "${FLAG_LIST}" == true && -n "${TARGET_PATH}" && -f "${TARGET_PATH}" ]]; then
+    echo -e "${COLOR_YELLOW}Warning: --list flag is designed for folders, ignoring for file${COLOR_RESET}" >&2
+    FLAG_LIST=false
+  fi
+
+  # --text and --archive only make sense with folders
+  if [[ "${FLAG_TEXT}" == true && -n "${TARGET_PATH}" && -f "${TARGET_PATH}" ]]; then
+    echo -e "${COLOR_YELLOW}Warning: --text flag only applies to folders, ignoring for file${COLOR_RESET}" >&2
+    FLAG_TEXT=false
+  fi
+
+  if [[ "${FLAG_ARCHIVE}" == true && -n "${TARGET_PATH}" && -f "${TARGET_PATH}" ]]; then
+    echo -e "${COLOR_YELLOW}Warning: --archive flag only applies to folders, ignoring for file${COLOR_RESET}" >&2
+    FLAG_ARCHIVE=false
+  fi
+}
+
+# Parse command-line arguments
+parse_args() {
+  if [[ $# -eq 0 ]]; then
+    show_usage
+    exit 0
+  fi
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        FLAG_HELP=true
+        shift
+        ;;
+      -v|--version)
+        FLAG_VERSION=true
+        shift
+        ;;
+      -t|--text)
+        FLAG_TEXT=true
+        shift
+        ;;
+      -a|--archive)
+        FLAG_ARCHIVE=true
+        shift
+        ;;
+      -l|--list)
+        FLAG_LIST=true
+        shift
+        ;;
+      -m|--mime)
+        FLAG_MIME=true
+        shift
+        ;;
+      -*)
+        echo -e "${COLOR_RED}Error: Unknown flag '$1'${COLOR_RESET}" >&2
+        echo -e "${COLOR_YELLOW}Use --help to see available options${COLOR_RESET}" >&2
+        exit 1
+        ;;
+      *)
+        TARGET_PATH="$1"
+        shift
+        ;;
+    esac
+  done
+}
+
+# Display version information
+show_version() {
+  cat << EOF
+${COLOR_BLUE}cpclip${COLOR_RESET} version ${COLOR_GREEN}${VERSION}${COLOR_RESET}
+
+License: MIT
+Repository: https://github.com/username/cpclip
+Platform: ${OS}
+
+Copyright (c) 2024 cpclip Contributors
+EOF
+}
+
+# Get MIME type of a file
+get_mime_type() {
+  local file_path="$1"
+  local mime_type=""
+
+  # Check if file command exists
+  if ! command -v file &> /dev/null; then
+    echo -e "${COLOR_YELLOW}Warning: 'file' command not found, defaulting to text/plain${COLOR_RESET}" >&2
+    echo "text/plain"
+    return 0
+  fi
+
+  # Get MIME type
+  mime_type=$(file --brief --mime-type "$file_path" 2>/dev/null)
+
+  if [[ -z "$mime_type" ]]; then
+    echo "application/octet-stream"
+  else
+    echo "$mime_type"
+  fi
+}
+
+# Display MIME type (for --mime flag)
+show_mime_type() {
+  local file_path="$1"
+
+  if [[ ! -e "$file_path" ]]; then
+    echo -e "${COLOR_RED}Error: File not found: $file_path${COLOR_RESET}" >&2
+    exit "${EXIT_FILE_NOT_FOUND}"
+  fi
+
+  local mime_type
+  mime_type=$(get_mime_type "$file_path")
+
+  echo -e "${COLOR_BLUE}File:${COLOR_RESET} $file_path"
+  echo -e "${COLOR_GREEN}MIME Type:${COLOR_RESET} $mime_type"
+
+  # Additional info
+  if [[ -f "$file_path" ]]; then
+    local file_size
+    file_size=$(du -h "$file_path" | cut -f1)
+    echo -e "${COLOR_YELLOW}Size:${COLOR_RESET} $file_size"
+  elif [[ -d "$file_path" ]]; then
+    echo -e "${COLOR_YELLOW}Type:${COLOR_RESET} Directory"
+  fi
+}
+
+# Copy file to clipboard
+copy_file() {
+  local file_path="$1"
+
+  # Path validation is done in main(), just verify it's a file
+  if [[ ! -f "$file_path" ]]; then
+    echo -e "${COLOR_RED}Error: Not a regular file: $file_path${COLOR_RESET}" >&2
+    exit "${EXIT_FILE_NOT_FOUND}"
+  fi
+
+  # Check file size (cross-platform stat)
+  local file_size
+  file_size=$(stat -f%z "$file_path" 2>/dev/null || stat -c%s "$file_path" 2>/dev/null)
+
+  if [[ -z "$file_size" ]]; then
+    echo -e "${COLOR_RED}Error: Cannot determine file size: $file_path${COLOR_RESET}" >&2
+    exit "${EXIT_UNSUPPORTED_OPERATION}"
+  fi
+
+  # Warn about empty files
+  if [[ $file_size -eq 0 ]]; then
+    echo -e "${COLOR_YELLOW}Warning: File is empty${COLOR_RESET}" >&2
+  fi
+
+  if [[ $file_size -gt $MAX_FILE_SIZE ]]; then
+    echo -e "${COLOR_RED}Error: File too large (>100MB): $file_path${COLOR_RESET}" >&2
+    exit "${EXIT_UNSUPPORTED_OPERATION}"
+  fi
+
+  # Show warning for large files before processing
+  if [[ $file_size -gt $WARN_FILE_SIZE ]]; then
+    echo -e "${COLOR_YELLOW}Warning: Large file (>10MB), this may take a moment...${COLOR_RESET}" >&2
+  fi
+
+  # Get MIME type
+  local mime_type
+  mime_type=$(get_mime_type "$file_path")
+
+  # Copy based on OS and clipboard tool
+  case "${CLIPBOARD_TOOL}" in
+    pbcopy)
+      # macOS: Try to preserve MIME type for images
+      if [[ "$mime_type" =~ ^image/ ]]; then
+        # Use osascript for image MIME preservation
+        osascript -e "set the clipboard to (read (POSIX file \"$(realpath "$file_path")\") as «class PNGf»)" 2>/dev/null ||
+        osascript -e "set the clipboard to (read (POSIX file \"$(realpath "$file_path")\") as JPEG picture)" 2>/dev/null ||
+        pbcopy < "$file_path"
+      else
+        # Text and other files
+        pbcopy < "$file_path"
+      fi
+      ;;
+
+    xclip)
+      # Linux with xclip
+      xclip -selection clipboard -t "$mime_type" -i "$file_path"
+      ;;
+
+    xsel)
+      # Linux with xsel (limited MIME support)
+      xsel --clipboard --input < "$file_path"
+      ;;
+
+    wl-copy)
+      # Wayland with wl-copy
+      wl-copy --type "$mime_type" < "$file_path"
+      ;;
+
+    clip.exe)
+      # WSL fallback (text only)
+      if [[ "$mime_type" =~ ^text/ ]]; then
+        clip.exe < "$file_path"
+      else
+        echo -e "${COLOR_YELLOW}Warning: WSL clip.exe only supports text files${COLOR_RESET}" >&2
+        clip.exe < "$file_path"
+      fi
+      ;;
+  esac
+
+  # Validate clipboard copy succeeded
+  validate_clipboard_copy
+
+  # Success message
+  local human_size
+  if command -v numfmt &> /dev/null; then
+    human_size=$(numfmt --to=iec-i --suffix=B "$file_size")
+  else
+    human_size="${file_size} bytes"
+  fi
+
+  echo -e "${COLOR_GREEN}✓${COLOR_RESET} Copied to clipboard:"
+  echo -e "  ${COLOR_BLUE}File:${COLOR_RESET} $file_path"
+  echo -e "  ${COLOR_BLUE}Type:${COLOR_RESET} $mime_type"
+  echo -e "  ${COLOR_BLUE}Size:${COLOR_RESET} $human_size"
+}
+
+# Copy folder to clipboard (native file references)
+copy_folder() {
+  local folder_path="$1"
+
+  # Path validation is done in main(), just verify it's a directory
+  if [[ ! -d "$folder_path" ]]; then
+    echo -e "${COLOR_RED}Error: Not a directory: $folder_path${COLOR_RESET}" >&2
+    exit "${EXIT_FILE_NOT_FOUND}"
+  fi
+
+  # Get folder statistics
+  local file_count
+  local total_size
+  file_count=$(find "$folder_path" -type f | wc -l | tr -d ' ')
+  total_size=$(du -sh "$folder_path" 2>/dev/null | cut -f1)
+
+  case "${OS}" in
+    macos)
+      if [[ "${FLAG_LIST}" == true ]]; then
+        # Create list of file paths
+        local file_list
+        file_list=$(find "$folder_path" -type f -exec realpath {} \; | sort)
+
+        # Copy to clipboard
+        echo -n "$file_list" | pbcopy
+
+        echo -e "${COLOR_GREEN}✓${COLOR_RESET} Copied file list to clipboard:"
+        echo -e "  ${COLOR_BLUE}Folder:${COLOR_RESET} $folder_path"
+        echo -e "  ${COLOR_BLUE}Files:${COLOR_RESET} $file_count"
+        echo -e "  ${COLOR_BLUE}Size:${COLOR_RESET} $total_size"
+      else
+        # Create file:// URL for macOS Finder
+        local abs_path
+        abs_path=$(realpath "$folder_path")
+        local file_url="file://${abs_path}"
+
+        # Copy URL to clipboard
+        echo -n "$file_url" | pbcopy
+
+        echo -e "${COLOR_GREEN}✓${COLOR_RESET} Copied folder reference to clipboard:"
+        echo -e "  ${COLOR_BLUE}Folder:${COLOR_RESET} $folder_path"
+        echo -e "  ${COLOR_BLUE}Files:${COLOR_RESET} $file_count"
+        echo -e "  ${COLOR_BLUE}Size:${COLOR_RESET} $total_size"
+        echo -e "  ${COLOR_YELLOW}Tip:${COLOR_RESET} Paste in Finder to create alias/copy"
+      fi
+      ;;
+
+    linux|windows)
+      # Create list of file paths
+      local file_list
+      if [[ "${FLAG_LIST}" == true ]]; then
+        # Just file names
+        file_list=$(find "$folder_path" -type f | sort)
+      else
+        # Full paths
+        file_list=$(find "$folder_path" -type f -exec realpath {} \; | sort)
+      fi
+
+      # Copy to clipboard
+      case "${CLIPBOARD_TOOL}" in
+        xclip)
+          echo "$file_list" | xclip -selection clipboard
+          ;;
+        xsel)
+          echo "$file_list" | xsel --clipboard --input
+          ;;
+        wl-copy)
+          echo "$file_list" | wl-copy
+          ;;
+        clip.exe)
+          echo "$file_list" | clip.exe
+          ;;
+      esac
+
+      echo -e "${COLOR_GREEN}✓${COLOR_RESET} Copied file list to clipboard:"
+      echo -e "  ${COLOR_BLUE}Folder:${COLOR_RESET} $folder_path"
+      echo -e "  ${COLOR_BLUE}Files:${COLOR_RESET} $file_count"
+      echo -e "  ${COLOR_BLUE}Size:${COLOR_RESET} $total_size"
+      ;;
+  esac
+}
+
+# Generate tree structure (fallback when tree command unavailable)
+generate_tree() {
+  local dir="$1"
+  local prefix="$2"
+  local output=""
+
+  # Get items in directory
+  local items=()
+  while IFS= read -r item; do
+    items+=("$item")
+  done < <(find "$dir" -maxdepth 1 -mindepth 1 ! -name '.git' ! -name 'node_modules' ! -name '.DS_Store' ! -name '__pycache__' ! -name '*.pyc' ! -name '.env' | sort)
+
+  local count=${#items[@]}
+  local i=0
+
+  for item in "${items[@]}"; do
+    i=$((i + 1))
+    local basename=$(basename "$item")
+
+    if [[ $i -eq $count ]]; then
+      # Last item
+      output+="${prefix}└── ${basename}"
+      if [[ -d "$item" ]]; then
+        output+="/"$'\n'
+        local subtree=$(generate_tree "$item" "${prefix}    ")
+        if [[ -n "$subtree" ]]; then
+          output+="${subtree}"$'\n'
+        fi
+      else
+        output+=$'\n'
+      fi
+    else
+      # Not last item
+      output+="${prefix}├── ${basename}"
+      if [[ -d "$item" ]]; then
+        output+="/"$'\n'
+        local subtree=$(generate_tree "$item" "${prefix}│   ")
+        if [[ -n "$subtree" ]]; then
+          output+="${subtree}"$'\n'
+        fi
+      else
+        output+=$'\n'
+      fi
+    fi
+  done
+
+  # Return output without trailing newline (will be added by caller)
+  echo -n "$output"
+}
+
+# Copy folder as text tree
+copy_folder_as_tree() {
+  local folder_path="$1"
+  local tree_output=""
+
+  # Path validation is done in main(), just verify it's a directory
+  if [[ ! -d "$folder_path" ]]; then
+    echo -e "${COLOR_RED}Error: Not a directory: $folder_path${COLOR_RESET}" >&2
+    exit "${EXIT_FILE_NOT_FOUND}"
+  fi
+
+  # Try to use tree command if available
+  if command -v tree &> /dev/null; then
+    tree_output=$(tree -a -I '.git|node_modules|.DS_Store|__pycache__|*.pyc|.env' "$folder_path")
+  else
+    # Fallback: Custom tree implementation
+    local folder_name=$(basename "$folder_path")
+    tree_output="${folder_name}/"$'\n'
+    tree_output+=$(generate_tree "$folder_path" "")
+  fi
+
+  # Copy to clipboard
+  case "${CLIPBOARD_TOOL}" in
+    pbcopy)
+      echo "$tree_output" | pbcopy
+      ;;
+    xclip)
+      echo "$tree_output" | xclip -selection clipboard
+      ;;
+    xsel)
+      echo "$tree_output" | xsel --clipboard --input
+      ;;
+    wl-copy)
+      echo "$tree_output" | wl-copy
+      ;;
+    clip.exe)
+      echo "$tree_output" | clip.exe
+      ;;
+  esac
+
+  # Success message
+  echo -e "${COLOR_GREEN}✓${COLOR_RESET} Copied folder tree to clipboard:"
+  echo -e "  ${COLOR_BLUE}Folder:${COLOR_RESET} $folder_path"
+  echo ""
+  echo "Preview:"
+  echo "$tree_output" | head -20
+  if [[ $(echo "$tree_output" | wc -l) -gt 20 ]]; then
+    echo "..."
+    echo "(output truncated, full tree copied to clipboard)"
+  fi
+}
+
+# Copy folder as tar.gz archive
+copy_folder_as_archive() {
+  local folder_path="$1"
+
+  # Path validation is done in main(), just verify it's a directory
+  if [[ ! -d "$folder_path" ]]; then
+    echo -e "${COLOR_RED}Error: Not a directory: $folder_path${COLOR_RESET}" >&2
+    exit "${EXIT_FILE_NOT_FOUND}"
+  fi
+
+  # Check if tar is available
+  if ! command -v tar &> /dev/null; then
+    echo -e "${COLOR_RED}Error: tar command not found${COLOR_RESET}" >&2
+    echo "Please install tar to use archive mode." >&2
+    exit "${EXIT_CLIPBOARD_UNAVAILABLE}"
+  fi
+
+  # Create archive name
+  local folder_name=$(basename "$folder_path")
+  local timestamp=$(date +%Y%m%d_%H%M%S)
+  local archive_name="${folder_name}_${timestamp}.tar.gz"
+  local archive_path="/tmp/${archive_name}"
+
+  # Create archive
+  echo -e "${COLOR_YELLOW}Creating archive...${COLOR_RESET}"
+  tar -czf "$archive_path" -C "$(dirname "$folder_path")" "$(basename "$folder_path")" 2>/dev/null
+
+  if [[ ! -f "$archive_path" ]]; then
+    echo -e "${COLOR_RED}Error: Failed to create archive${COLOR_RESET}" >&2
+    exit 1
+  fi
+
+  # Get archive size
+  local archive_size
+  if command -v numfmt &> /dev/null; then
+    archive_size=$(numfmt --to=iec-i --suffix=B $(stat -f%z "$archive_path" 2>/dev/null || stat -c%s "$archive_path"))
+  else
+    archive_size=$(du -h "$archive_path" | cut -f1)
+  fi
+
+  # Copy archive path to clipboard
+  case "${CLIPBOARD_TOOL}" in
+    pbcopy)
+      echo -n "$archive_path" | pbcopy
+      ;;
+    xclip)
+      echo -n "$archive_path" | xclip -selection clipboard
+      ;;
+    xsel)
+      echo -n "$archive_path" | xsel --clipboard --input
+      ;;
+    wl-copy)
+      echo -n "$archive_path" | wl-copy
+      ;;
+    clip.exe)
+      echo -n "$archive_path" | clip.exe
+      ;;
+  esac
+
+  # Success message
+  echo -e "${COLOR_GREEN}✓${COLOR_RESET} Created archive and copied path to clipboard:"
+  echo -e "  ${COLOR_BLUE}Archive:${COLOR_RESET} $archive_path"
+  echo -e "  ${COLOR_BLUE}Size:${COLOR_RESET} $archive_size"
+  echo -e "  ${COLOR_YELLOW}Note:${COLOR_RESET} Archive is in /tmp and will be deleted on reboot"
+}
+
 # Main entry point
 main() {
   detect_os
-  echo "cpclip v${VERSION}"
-  echo "Detected OS: ${OS}"
+  parse_args "$@"
+
+  # Handle help flag
+  if [[ "${FLAG_HELP}" == true ]]; then
+    show_usage
+    exit 0
+  fi
+
+  # Handle version flag
+  if [[ "${FLAG_VERSION}" == true ]]; then
+    show_version
+    exit 0
+  fi
+
+  # Handle MIME flag (dry-run, no clipboard needed)
+  if [[ "${FLAG_MIME}" == true ]]; then
+    if [[ -z "${TARGET_PATH}" ]]; then
+      echo -e "${COLOR_RED}Error: No file specified for MIME type detection${COLOR_RESET}" >&2
+      show_usage
+      exit 1
+    fi
+    show_mime_type "${TARGET_PATH}"
+    exit 0
+  fi
+
+  # Validate flag combinations
+  validate_flags
+
+  # Detect clipboard tool after processing help/version/mime flags
+  detect_clipboard_tool
+
+  # Validate target path
+  if [[ -z "${TARGET_PATH}" ]]; then
+    echo -e "${COLOR_RED}Error: No file or folder specified${COLOR_RESET}" >&2
+    show_usage
+    exit 1
+  fi
+
+  # Validate path exists (this will provide helpful error messages)
+  if ! validate_path "${TARGET_PATH}"; then
+    exit "${EXIT_FILE_NOT_FOUND}"
+  fi
+
+  # Copy file or folder
+  if [[ -f "${TARGET_PATH}" ]]; then
+    copy_file "${TARGET_PATH}"
+  elif [[ -d "${TARGET_PATH}" ]]; then
+    # Check for folder-specific flags
+    if [[ "${FLAG_TEXT}" == true ]]; then
+      copy_folder_as_tree "${TARGET_PATH}"
+    elif [[ "${FLAG_ARCHIVE}" == true ]]; then
+      copy_folder_as_archive "${TARGET_PATH}"
+    else
+      copy_folder "${TARGET_PATH}"
+    fi
+  else
+    # This should not be reached due to validate_path above, but just in case
+    echo -e "${COLOR_RED}Error: Path is neither a file nor a directory: ${TARGET_PATH}${COLOR_RESET}" >&2
+    exit "${EXIT_FILE_NOT_FOUND}"
+  fi
 }
 
 # Execute main function

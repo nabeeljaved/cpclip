@@ -326,4 +326,6 @@ Suggests: tree
 
 ---
 
+Do not use emojis. Do not fabricate or make assumptions. Search the internet where needed.
+
 **Ready to implement:** This plan delivers a professional, production-ready CLI tool that's genuinely useful and easy to install across all major platforms.
