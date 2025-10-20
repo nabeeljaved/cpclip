@@ -32,10 +32,53 @@ readonly COLOR_GREEN="\033[0;32m"
 readonly COLOR_YELLOW="\033[0;33m"
 readonly COLOR_BLUE="\033[0;34m"
 
-# Main entry point (placeholder)
+# Exit codes
+readonly EXIT_SUCCESS=0
+readonly EXIT_FILE_NOT_FOUND=1
+readonly EXIT_CLIPBOARD_UNAVAILABLE=2
+readonly EXIT_PERMISSION_DENIED=3
+readonly EXIT_UNSUPPORTED_OPERATION=4
+
+# File size limits (in bytes)
+readonly MAX_FILE_SIZE=$((100 * 1024 * 1024))  # 100MB
+readonly WARN_FILE_SIZE=$((10 * 1024 * 1024))   # 10MB
+
+# Supported MIME types
+readonly TEXT_MIME_PATTERN="^text/"
+readonly IMAGE_MIME_PATTERN="^image/"
+readonly BINARY_MIME_PATTERN="^application/"
+
+# Global variables
+OS=""
+
+# Detect operating system
+detect_os() {
+  local uname_output
+  uname_output="$(uname -s)"
+
+  case "${uname_output}" in
+    Darwin*)
+      OS="macos"
+      ;;
+    Linux*)
+      OS="linux"
+      ;;
+    CYGWIN*|MINGW*|MSYS*)
+      OS="windows"
+      ;;
+    *)
+      OS="unknown"
+      ;;
+  esac
+
+  readonly OS
+}
+
+# Main entry point
 main() {
+  detect_os
   echo "cpclip v${VERSION}"
-  echo "Script skeleton created successfully"
+  echo "Detected OS: ${OS}"
 }
 
 # Execute main function
