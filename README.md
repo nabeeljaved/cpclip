@@ -104,9 +104,9 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Author
 
-[Your Name]
+Nabeel Javed<nabeel.javed@gmail.com>
 
-## Support
+<!-- ## Support
 
 - 🐛 Report bugs: [GitHub Issues](https://github.com/username/cpclip/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/username/cpclip/discussions)
+- 💬 Discussions: [GitHub Discussions](https://github.com/username/cpclip/discussions) -->
