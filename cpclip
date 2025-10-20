@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# cpclip - Copy files and folders to clipboard with MIME type preservation
+#
+# Version: 1.0.0
+# Author: cpclip Contributors
+# License: MIT
+# Repository: https://github.com/username/cpclip
+#
+# Description:
+#   A professional CLI tool to copy file contents to the system clipboard
+#   while preserving MIME types. Supports text files, images, binary files,
+#   and entire folders.
+#
+# Usage:
+#   cpclip <file|folder>
+#   cpclip --help
+#   cpclip --version
+#
+
+# Exit on error, undefined variables, and pipe failures
+set -euo pipefail
+
+# Script metadata
+readonly VERSION="1.0.0"
+readonly SCRIPT_NAME="cpclip"
+
+# Color codes for output (optional, for better UX)
+readonly COLOR_RESET="\033[0m"
+readonly COLOR_RED="\033[0;31m"
+readonly COLOR_GREEN="\033[0;32m"
+readonly COLOR_YELLOW="\033[0;33m"
+readonly COLOR_BLUE="\033[0;34m"
+
+# Main entry point (placeholder)
+main() {
+  echo "cpclip v${VERSION}"
+  echo "Script skeleton created successfully"
+}
+
+# Execute main function
+main "$@"
