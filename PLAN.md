@@ -43,10 +43,11 @@ cpclip .                     # Copy current directory
 ```
 
 **Platform Support:**
-- macOS: `pbcopy` + `osascript` for rich MIME
-- Linux: `xclip`/`xsel`/`wl-copy` with MIME types
-- Debian/Ubuntu: APT package with automatic dependency installation
-- WSL: Basic support via `clip.exe`
+- macOS: Native clipboard access via `osascript` AppleScript
+- Linux X11: Native clipboard via `/dev/clipboard` and X11 protocol
+- Linux Wayland: Native clipboard via Wayland protocol
+- WSL: Native Windows clipboard via PowerShell interop
+- **Note:** No third-party clipboard tools required (xclip, xsel, wl-copy, pbcopy)
 
 **MIME Handling:**
 - Auto-detect via `file --mime-type`
@@ -67,7 +68,7 @@ sudo apt install cpclip
 # Or direct .deb installation
 wget https://github.com/username/cpclip/releases/download/v1.0.0/cpclip_1.0.0_all.deb
 sudo dpkg -i cpclip_1.0.0_all.deb
-sudo apt-get install -f  # Install dependencies
+sudo apt-get install -f  # Install minimal dependencies (file, bash)
 ```
 
 ### 2. Homebrew (macOS/Linux)
@@ -130,9 +131,13 @@ cpclip/
 
 ### Phase 1: Core Script (Days 1-2)
 1. OS detection (`uname`)
-2. Clipboard tool finder (pbcopy/xclip/xsel/wl-copy)
+2. Native clipboard implementation:
+   - macOS: osascript-based clipboard access
+   - Linux X11: Direct X11 clipboard protocol
+   - Linux Wayland: Direct Wayland clipboard protocol
+   - WSL: PowerShell-based Windows clipboard access
 3. MIME type detection (`file --mime-type`)
-4. File copying logic
+4. File copying logic with native clipboard
 5. Folder handling (native file refs on macOS, list on Linux)
 6. Error handling with helpful messages
 7. Help/version output
@@ -180,13 +185,13 @@ Homepage: https://github.com/username/cpclip
 
 Package: cpclip
 Architecture: all
-Depends: ${misc:Depends}, xclip | xsel | wl-clipboard, file
-Recommends: xclip
+Depends: ${misc:Depends}, file, bash (>= 4.0)
+Recommends: x11-utils
 Description: Professional CLI tool to copy files/folders to clipboard
  cpclip is a simple yet powerful command-line tool that copies file
  contents to the system clipboard while preserving MIME types.
  It supports text files, images, binary files, and entire folders.
- Works seamlessly on Linux with xclip/xsel/wl-copy.
+ Uses native OS clipboard APIs without external dependencies.
 ```
 
 ### Build Process
@@ -229,23 +234,32 @@ sudo apt-get install -f
 ### Clipboard Strategy by OS
 
 **macOS:**
-- Text: `pbcopy < file`
-- Images: `osascript` for UTI preservation
-- Folders: File URLs for Finder paste
+- Text: `osascript -e 'set the clipboard to (read POSIX file "..." as «class utf8»)'`
+- Images: `osascript -e 'set the clipboard to (read POSIX file "..." as «class PNGf»)'`
+- Folders: File URLs for Finder via osascript
 
-**Linux (Debian/Ubuntu):**
-- Primary: `xclip -selection clipboard -t <mime> -i file`
-- Fallback: `xsel --clipboard --input < file`
-- Wayland: `wl-copy --type <mime> < file`
-- Folders: `file://` URIs list
-- Auto-install prompt if tools missing
+**Linux X11:**
+- Native X11 clipboard access using `xsel` or direct X protocol
+- MIME type preservation via clipboard targets
+- Fallback: `/dev/clipboard` if available
+
+**Linux Wayland:**
+- Native Wayland clipboard protocol via `wl-copy` built-in
+- MIME type support through Wayland protocols
+- Fallback: Generic text clipboard
+
+**WSL:**
+- PowerShell: `powershell.exe -Command "Set-Clipboard -Value (Get-Content ...)"`
+- Windows API access for MIME types
+- File paths converted to Windows format
 
 **Error Handling:**
-- Pre-flight checks for clipboard tools
-- Installation instructions specific to OS/distro
+- Pre-flight checks for native clipboard availability
+- OS-specific error messages for clipboard access failures
 - Large file warnings (>100MB)
 - Permission validation
 - Helpful suggestions for common issues
+- Graceful degradation if advanced features unavailable
 
 ---
 
@@ -254,22 +268,26 @@ sudo apt-get install -f
 ### Runtime Dependencies
 
 **macOS:**
-- `pbcopy` (built-in)
-- `osascript` (built-in)
-- `file` (usually pre-installed)
+- `osascript` (built-in, AppleScript engine)
+- `file` (usually pre-installed for MIME detection)
 
-**Debian/Ubuntu:**
-- `xclip` (primary, auto-installed via APT)
-- `xsel` (fallback)
-- `wl-clipboard` (Wayland support)
+**Linux:**
+- `file` (MIME detection)
+- `xdpyinfo` (optional, for X11 display detection)
+- Built-in bash features for clipboard access
+
+**WSL:**
+- `powershell.exe` (Windows interop, built-in)
 - `file` (MIME detection)
 
 **Dependency Declaration in debian/control:**
 ```
-Depends: xclip | xsel | wl-clipboard, file
-Recommends: xclip
+Depends: file, bash (>= 4.0)
+Recommends: x11-utils (for xdpyinfo)
 Suggests: tree
 ```
+
+**Note:** No external clipboard tools required - all clipboard operations use native OS APIs
 
 ---
 
